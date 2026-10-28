@@ -1,0 +1,16 @@
+{
+  "description": "Warns when an edit adds a personal-data column or table without a deletion path, or grants a personal-data table to PUBLIC. The check runs in the herculean CLI; when herculean is not installed the hook does nothing.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v herculean >/dev/null 2>&1 || { cat >/dev/null; exit 0; }; exec herculean hook"
+          }
+        ]
+      }
+    ]
+  }
+}

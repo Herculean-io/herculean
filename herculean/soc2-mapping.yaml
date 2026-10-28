@@ -1,0 +1,55 @@
+# Check -> SOC 2 criteria and severity. This file is data: edit it (or pass
+# `herculean report --mapping <path>`) to change the report, no code change needed.
+#
+# Criterion IDs and titles are short neutral descriptions that MUST be verified
+# against the AICPA Trust Services Criteria before release (verify_before_release).
+# A qualified human with the TSC text (an outside auditor or vCISO), never a
+# model from memory, checks each ID, its title and the checks mapped to it
+# against TSC 2017 with the 2022 revised points of focus. For each criterion
+# verified, they fill in its `Verified by` line and set verify_before_release
+# to false. Until every criterion is false, readiness.md names the unverified
+# ones and a release fails (`cargo test --lib shipped_mapping -- --ignored`).
+criteria:
+  - id: C1.1
+    title: Identification and maintenance of confidential information
+    # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
+    verify_before_release: true
+  - id: C1.2
+    title: Disposal of confidential information
+    # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
+    verify_before_release: true
+  - id: CC6.1
+    title: Logical access security over protected information assets
+    # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
+    verify_before_release: true
+  - id: CC6.3
+    title: Role-based access, least privilege and segregation of duties
+    # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
+    verify_before_release: true
+  - id: CC8.1
+    title: Authorized, tested and documented changes to infrastructure and data
+    # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
+    verify_before_release: true
+  - id: P4.3
+    title: Secure disposal of personal information
+    # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
+    verify_before_release: true
+
+# Severity: low < medium < high. `--fail-on <level>` exits 2 when a finding's
+# check has at least that severity.
+checks:
+  data_map:
+    severity: low
+    criteria: [C1.1]
+  deletion_path:
+    severity: high
+    criteria: [C1.2, P4.3]
+  recreation_risk:
+    severity: high
+    criteria: [C1.2, P4.3]
+  least_privilege:
+    severity: high
+    criteria: [CC6.1, CC6.3]
+  drift:
+    severity: medium
+    criteria: [CC8.1]

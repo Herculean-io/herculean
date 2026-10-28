@@ -1,0 +1,7 @@
+overrides:
+  - column: public.customers.notes
+    category: free_text
+  - column: public.customers.full_name
+    personal: false
+  - column: public.vendors.name
+    personal: false

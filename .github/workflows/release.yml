@@ -1,0 +1,119 @@
+name: Release
+
+# Builds the herculean binary for each platform. A pushed `v*` tag (matching the crate version) also publishes a
+# GitHub Release with the archives and SHA256SUMS. A pull request that changes this file runs the builds only.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml", "install.sh"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Runs once, before the builds; on a pull request or a manual run the gate step is skipped.
+  mapping-gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fails until a qualified human has verified every criterion in herculean/soc2-mapping.yaml.
+      # It also fails if the named test did not run, so renaming or moving it cannot pass a release.
+      - name: The shipped SOC 2 mapping is verified
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cargo test --locked --manifest-path herculean/Cargo.toml --lib -- --ignored --exact soc2::tests::shipped_mapping_has_no_unverified_entries | tee mapping-gate.log
+          grep -q "test result: ok. 1 passed" mapping-gate.log
+
+  build:
+    needs: mapping-gate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04, cross: true }
+          - { target: x86_64-apple-darwin, os: macos-latest, cross: true }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' herculean/Cargo.toml | head -1)
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "::error::tag $GITHUB_REF_NAME does not match crate version $version"; exit 1; }
+
+      - name: Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Linux arm64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --locked --manifest-path herculean/Cargo.toml --target ${{ matrix.target }}
+
+      - name: Smoke test
+        if: ${{ !matrix.cross }}
+        run: |
+          bin=herculean/target/${{ matrix.target }}/release/herculean
+          "$bin" --version
+          echo '{}' | "$bin" hook
+
+      - name: Package
+        run: |
+          name=herculean-${{ matrix.target }}
+          mkdir -p "dist/$name"
+          if [ "${{ runner.os }}" = Windows ]; then
+            cp herculean/target/${{ matrix.target }}/release/herculean.exe "dist/$name/"
+          else
+            cp herculean/target/${{ matrix.target }}/release/herculean "dist/$name/"
+          fi
+          cp LICENSE README.md herculean/read-only-role.sql "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = Windows ]; then
+            7z a -tzip "$name.zip" "$name" > /dev/null
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          rm -r "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herculean-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum herculean-* > SHA256SUMS && cat SHA256SUMS
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "herculean $GITHUB_REF_NAME"

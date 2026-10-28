@@ -1,0 +1,5 @@
+overrides:
+  - column: public.patients.user_email
+    personal: false
+  - column: public.patients.diagnosis
+    category: free_text

@@ -1,0 +1,19 @@
+[package]
+name = "herculean"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Maps personal data in Postgres and reports deletion gaps."
+
+[dependencies]
+percent-encoding = "2"
+postgres = "0.19"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_norway = "0.9"
+sha2 = "0.11"
+sqlparser = { version = "0.63", default-features = false, features = ["std"] }
+tokio-postgres-rustls = { version = "0.14", features = ["ring"] }
+webpki-roots = "1"

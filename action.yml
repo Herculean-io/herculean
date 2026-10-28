@@ -1,0 +1,113 @@
+name: Herculean
+description: Map personal data in your repo (and optionally Postgres), write a SOC 2 readiness report, and fail the job on findings at or above a severity.
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  repo:
+    description: Path of the repo to scan (migrations and code).
+    default: .
+  fail-on:
+    description: "Fail the job when a finding has at least this severity: low, medium or high."
+    default: high
+  out:
+    description: Directory the report is written to (readiness.md, report.json, evidence/).
+    default: herculean-report
+  database-url:
+    description: Optional read-only Postgres connection string. Pass it from a secret. For a remote database include sslmode=verify-full, plus sslrootcert=<path to the CA bundle> for a private CA such as AWS RDS (global-bundle.pem). sslmode=require encrypts but does not authenticate the server. Per service, RDS/Aurora sslmode=verify-full sslrootcert=global-bundle.pem (RDS Proxy needs none); Cloud SQL sslmode=verify-ca with sslrootcert=server-ca.pem; AlloyDB direct supports only require, use the Auth Proxy; Azure verify-full, no root in public regions; Neon verify-full on the direct host, not the -pooler host; Supabase sslmode=verify-full sslrootcert=prod-ca-2021.crt and the session pooler (port 5432), since runners have no IPv6. The Supabase transaction pooler (port 6543) is refused. See docs/quickstart.md. Without it the run is repo-only.
+    default: ""
+  ref:
+    description: Git ref of Herculean to install. Empty installs the same ref as this action. A release tag (v0.1.0) installs that release's prebuilt binary, checked against its SHA256SUMS; any other ref, or a runner with no prebuilt binary, builds it from source with cargo.
+    default: ""
+  artifact-name:
+    description: Name of the uploaded report artifact. Must be unique within a workflow run.
+    default: herculean-report
+
+outputs:
+  exit-code:
+    description: "herculean report's exit code: 0 below the threshold, 2 at or above it, 1 on error."
+    value: ${{ steps.run.outputs.code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install herculean
+      shell: bash
+      env:
+        REF: ${{ inputs.ref }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_REPO: ${{ github.action_repository }}
+      run: |
+        # Both ways install into $bin, on PATH here and (through GITHUB_PATH) in the job's later steps.
+        bin=$RUNNER_TEMP/herculean/bin
+        echo "$bin" >> "$GITHUB_PATH"
+        export PATH="$bin:$PATH"
+        tag=${REF:-$ACTION_REF}
+        # A fork or mirror at its own tag builds its own checkout, not upstream's release binary.
+        if [ -z "$REF" ] && [ -n "$ACTION_REPO" ] && [ "$ACTION_REPO" != Herculean-io/herculean ]; then
+          tag=
+        fi
+        case "$tag" in
+          v[0-9]*)
+            # A release tag: that release's prebuilt binary, checked against its SHA256SUMS.
+            code=0
+            HERCULEAN_VERSION="$tag" HERCULEAN_INSTALL_DIR="$bin" sh "$GITHUB_ACTION_PATH/install.sh" || code=$?
+            case $code in
+              0) exit 0 ;;
+              # install.sh's failed verification: a corrupt or tampered archive is an error, not a reason to build.
+              3) echo "::error::herculean: release $tag failed checksum verification"; exit 3 ;;
+            esac
+            # No asset for this runner (download failed), no target, or a binary that does not run here.
+            echo "::warning::herculean: release $tag install failed (see above); building from source"
+            ;;
+        esac
+        if ! command -v cargo >/dev/null; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          export PATH="$HOME/.cargo/bin:$PATH"
+        fi
+        if [ -z "$REF" ]; then
+          # The action's own checkout is this repo at the action's ref.
+          cargo install --locked --root "$RUNNER_TEMP/herculean" --path "$GITHUB_ACTION_PATH/herculean"
+        else
+          # `--rev` takes a commit or tag; a branch name needs `--branch` (cargo fetches no branch refs).
+          case $REF in
+            [0-9a-f]*) [ "${#REF}" -ge 7 ] && [ -z "${REF//[0-9a-f]/}" ] && sel=--rev || sel=--branch ;;
+            v[0-9]*) sel=--tag ;;
+            *) sel=--branch ;;
+          esac
+          cargo install --locked --root "$RUNNER_TEMP/herculean" --git https://github.com/Herculean-io/herculean "$sel" "$REF" herculean
+        fi
+
+    - name: Run herculean report
+      id: run
+      shell: bash
+      env:
+        HERCULEAN_DATABASE_URL: ${{ inputs.database-url }}
+        OUT: ${{ inputs.out }}
+        REPO: ${{ inputs.repo }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        # An empty URL means repo-only: herculean must not see the variable at all.
+        [ -n "$HERCULEAN_DATABASE_URL" ] || unset HERCULEAN_DATABASE_URL
+        code=0
+        herculean report --out "$OUT" --repo "$REPO" --fail-on "$FAIL_ON" || code=$?
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+
+    # The run step above never fails, so the report is uploaded before the gate.
+    - name: Upload report
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.out }}
+
+    - name: Gate on severity
+      shell: bash
+      env:
+        CODE: ${{ steps.run.outputs.code }}
+      run: |
+        case "$CODE" in
+          0) echo "herculean: no finding at or above the threshold" ;;
+          2) echo "::error::herculean: findings at or above the threshold; see the report artifact"; exit 2 ;;
+          *) echo "::error::herculean report failed (exit $CODE)"; exit "$CODE" ;;
+        esac

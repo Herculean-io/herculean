@@ -1,0 +1,16 @@
+{
+  "name": "herculean",
+  "description": "The Herculean Claude Code plugin: personal-data scan, SOC 2 readiness and a drift hook.",
+  "owner": {
+    "name": "Herculean"
+  },
+  "plugins": [
+    {
+      "name": "herculean",
+      "source": "./plugin",
+      "description": "Personal-data scan, SOC 2 readiness summary and a drift hook, backed by the herculean CLI.",
+      "version": "0.1.0",
+      "license": "Apache-2.0"
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  HERCULEAN_PG_BIN: /usr/lib/postgresql/16/bin
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: herculean
+    steps:
+      - uses: actions/checkout@v4
+      - name: Postgres 16 server binaries and pg_cron (tests/cron_database.rs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-16 postgresql-16-cron
+      - name: Claude Code CLI (for the plugin tests)
+        run: npm i -g @anthropic-ai/claude-code
+      - run: rustup component add rustfmt clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - name: A release build ignores HERCULEAN_NOW (ADR 0004)
+        run: cargo test --release --test report herculean_now
+
+  msrv:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: herculean
+    steps:
+      - uses: actions/checkout@v4
+      - name: The locked build compiles on the declared rust-version
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          test -n "$msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          cargo "+$msrv" check --locked --all-targets
+
+  action-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the Action on a repo with a high finding
+        id: sample
+        uses: ./
+        continue-on-error: true
+        with:
+          repo: examples/sample-app
+          out: report-sample-app
+          artifact-name: herculean-report-sample-app
+      - name: The Action failed the job because of the finding
+        run: |
+          test "${{ steps.sample.outcome }}" = failure
+          test "${{ steps.sample.outputs.exit-code }}" = 2
+          test -f report-sample-app/readiness.md
+
+      - name: Run the Action on a repo with a deletion path
+        id: clean
+        uses: ./
+        with:
+          repo: examples/clean-app
+          out: report-clean-app
+          artifact-name: herculean-report-clean-app
+      - name: The Action let the job continue (no finding at the threshold)
+        run: |
+          test "${{ steps.clean.outcome }}" = success
+          test "${{ steps.clean.outputs.exit-code }}" = 0
+
+  quickstart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Postgres 16 server binaries
+        run: |
+          if [ ! -x "$HERCULEAN_PG_BIN/initdb" ]; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-16
+          fi
+      - name: A local Postgres holding the skeleton fixture as mydb
+        run: |
+          sock="$RUNNER_TEMP/pg"
+          mkdir -p "$sock"
+          "$HERCULEAN_PG_BIN/initdb" -U postgres --auth-local=trust --auth-host=scram-sha-256 -D "$sock/data"
+          "$HERCULEAN_PG_BIN/pg_ctl" -w -D "$sock/data" -l "$sock/log" \
+            -o "-c listen_addresses=localhost -c unix_socket_directories=$sock" start
+          echo "PGHOST=$sock" >> "$GITHUB_ENV"
+          echo "PGUSER=postgres" >> "$GITHUB_ENV"
+          psql -h "$sock" -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE mydb'
+          psql -h "$sock" -U postgres -d mydb -v ON_ERROR_STOP=1 \
+            -f herculean/tests/fixtures/personal_table_without_deletion_path.sql
+      - name: Follow docs/quickstart.md (every sh block, in order)
+        run: |
+          awk '/^```sh$/{f=1;next} /^```$/{f=0} f' docs/quickstart.md > "$RUNNER_TEMP/quickstart.sh"
+          cat "$RUNNER_TEMP/quickstart.sh"
+          bash -eo pipefail "$RUNNER_TEMP/quickstart.sh"
+          # the skeleton fixture's one finding: customers has no deletion path
+          grep -F '| deletion_path | findings_open | 1 |' herculean-report/readiness.md
