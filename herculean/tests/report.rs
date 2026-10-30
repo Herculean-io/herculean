@@ -258,6 +258,115 @@ checks:
     assert_eq!(evidence["items"][0]["result"], "findings_open");
 }
 
+/// A mapping link can name the finding kinds it carries: other kinds of the
+/// same check stay out of that criterion's evidence.
+#[test]
+fn a_mapping_link_can_carry_only_some_finding_kinds() {
+    let db = fixture_db(FIXTURE);
+    let tmp = TempDir::new();
+    let mapping = tmp.0.join("mapping.yaml");
+    std::fs::write(
+        &mapping,
+        "
+criteria:
+  - { id: X.1, title: Every deletion finding, verify_before_release: true }
+  - { id: X.2, title: Soft deletes only, verify_before_release: true }
+checks:
+  deletion_path:
+    severity: high
+    criteria: [X.1, { id: X.2, kinds: [soft_delete_without_purge] }]
+",
+    )
+    .unwrap();
+    let (out, dir) = report(&db.url, &tmp, &["--mapping", mapping.to_str().unwrap()]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let all = read_json(&dir.join("evidence/X.1.json"));
+    assert_eq!(all["items"][0]["result"], "findings_open");
+    assert_eq!(all["items"][0]["findings"][0]["kind"], "no_deletion_path");
+    let some = read_json(&dir.join("evidence/X.2.json"));
+    assert_eq!(some["items"][0]["result"], "no_findings");
+    assert_eq!(some["items"][0]["findings"], json!([]));
+
+    std::fs::write(
+        &mapping,
+        "
+criteria:
+  - { id: X.1, title: T, verify_before_release: true }
+checks:
+  deletion_path: { severity: high, criteria: [{ id: X.1, kinds: [] }] }
+",
+    )
+    .unwrap();
+    let (out, _) = report(&db.url, &tmp, &["--mapping", mapping.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("empty kinds"));
+
+    // A mistyped kind would make the criterion read clean: it is an error.
+    for (links, error) in [
+        (
+            "[{ id: X.1, kinds: [no_deletion_paht] }]",
+            "no finding kind no_deletion_paht",
+        ),
+        (
+            "[{ id: X.1, kind: [no_deletion_path] }]",
+            "{ id: <criterion>, kinds: [<finding kind>, ...] }",
+        ),
+        (
+            "[X.1, { id: X.1, kinds: [no_deletion_path] }]",
+            "maps to X.1 twice",
+        ),
+    ] {
+        std::fs::write(
+            &mapping,
+            format!(
+                "criteria:\n  - {{ id: X.1, title: T, verify_before_release: true }}\n\
+                 checks:\n  deletion_path: {{ severity: high, criteria: {links} }}\n"
+            ),
+        )
+        .unwrap();
+        let (out, _) = report(&db.url, &tmp, &["--mapping", mapping.to_str().unwrap()]);
+        assert_eq!(out.status.code(), Some(1), "{links}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(error), "{links}: {stderr}");
+    }
+}
+
+/// The shipped mapping sends recreation_risk to CC6.1 only for flows that
+/// leave the database (points of access by outside entities), and uses the
+/// TSC's own framing for the CC7.1 title.
+#[test]
+fn shipped_mapping_sends_only_outbound_flows_to_cc6_1() {
+    let mapping =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/soc2-mapping.yaml")).unwrap();
+    assert!(
+        mapping.contains(
+            "{ id: CC6.1, kinds: [subscription, foreign_table, export_trigger, supabase_functions] }"
+        ),
+        "{mapping}"
+    );
+    assert!(
+        mapping
+            .contains("title: Monitoring for configuration changes that introduce vulnerabilities"),
+        "{mapping}"
+    );
+}
+
+/// The shipped mapping sends only drift's grant mismatches to CC6.3.
+#[test]
+fn shipped_mapping_sends_only_grant_drift_to_cc6_3() {
+    let mapping =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/soc2-mapping.yaml")).unwrap();
+    assert!(
+        mapping.contains("{ id: CC6.3, kinds: [grant_mismatch] }"),
+        "{mapping}"
+    );
+}
+
 #[test]
 fn timestamp_defaults_to_the_utc_clock_in_rfc3339() {
     let db = fixture_db(FIXTURE);
@@ -580,11 +689,13 @@ fn a_repo_only_report_says_not_run_instead_of_zero_findings() {
             .unwrap_or_else(|| panic!("no {id} line: {stdout}"))
             .to_string()
     };
-    for id in ["CC6.1", "CC6.3", "CC8.1"] {
+    for id in ["CC6.3", "CC7.1", "CC8.1"] {
         assert!(line(id).contains(": not run,"), "{}", line(id));
     }
     // deletion_path ran, recreation_risk did not.
     assert!(line("C1.2").contains(": partly run,"), "{}", line("C1.2"));
+    // data_map ran, least_privilege and recreation_risk did not.
+    assert!(line("CC6.1").contains(": partly run,"), "{}", line("CC6.1"));
     assert!(
         line("C1.1").contains(": 1 open finding(s),"),
         "{}",
@@ -1044,9 +1155,10 @@ fn readiness_and_evidence_mark_checks_not_run_or_partly_run() {
         let rest = &readiness[start + 1..];
         rest[..rest[1..].find("\n## ").map_or(rest.len(), |e| e + 1)].to_string()
     };
-    let cc61 = section("CC6.1");
-    assert!(cc61.contains("\nStatus: not run\n"), "{cc61}");
-    assert!(cc61.contains("| least_privilege | not_run | - |"), "{cc61}");
+    let cc71 = section("CC7.1");
+    assert!(cc71.contains("\nStatus: not run\n"), "{cc71}");
+    assert!(cc71.contains("| least_privilege | not_run | - |"), "{cc71}");
+    assert!(cc71.contains("| drift | not_run | - |"), "{cc71}");
     let c12 = section("C1.2");
     assert!(c12.contains("\nStatus: partly run\n"), "{c12}");
     assert!(
@@ -1057,7 +1169,7 @@ fn readiness_and_evidence_mark_checks_not_run_or_partly_run() {
     assert!(c12.contains("| recreation_risk | not_run | - |"), "{c12}");
     assert!(section("C1.1").contains("\nStatus: 1 open finding(s)\n"));
     assert_eq!(
-        read_json(&dir.join("evidence/CC6.1.json"))["status"],
+        read_json(&dir.join("evidence/CC7.1.json"))["status"],
         "not run"
     );
     assert_eq!(
@@ -1097,8 +1209,8 @@ fn the_verify_banner_names_unverified_criteria_until_all_are_verified() {
     let one_pending = run(true);
     assert!(
         one_pending.contains(
-            "Criterion IDs and titles must be verified against the AICPA Trust Services \
-             Criteria before release. Not yet verified: B2.\n"
+            "Criterion IDs, titles and the checks mapped to each must be verified against the \
+             AICPA Trust Services Criteria before release. Not yet verified: B2.\n"
         ),
         "{one_pending}"
     );

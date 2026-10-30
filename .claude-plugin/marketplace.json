@@ -9,7 +9,7 @@
       "name": "herculean",
       "source": "./plugin",
       "description": "Personal-data scan, SOC 2 readiness summary and a drift hook, backed by the herculean CLI.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "license": "Apache-2.0"
     }
   ]

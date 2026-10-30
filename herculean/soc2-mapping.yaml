@@ -26,6 +26,10 @@ criteria:
     title: Role-based access, least privilege and segregation of duties
     # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
     verify_before_release: true
+  - id: CC7.1
+    title: Monitoring for configuration changes that introduce vulnerabilities, and for newly discovered vulnerabilities
+    # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
+    verify_before_release: true
   - id: CC8.1
     title: Authorized, tested and documented changes to infrastructure and data
     # Verified by: (pending) | TSC edition: (pending) | Date: (pending)
@@ -40,16 +44,18 @@ criteria:
 checks:
   data_map:
     severity: low
-    criteria: [C1.1]
+    criteria: [C1.1, CC6.1]
   deletion_path:
     severity: high
     criteria: [C1.2, P4.3]
   recreation_risk:
     severity: high
-    criteria: [C1.2, P4.3]
+    # CC6.1 only for flows that leave the database (points of access by outside entities).
+    criteria: [C1.2, P4.3, { id: CC6.1, kinds: [subscription, foreign_table, export_trigger, supabase_functions] }]
   least_privilege:
     severity: high
-    criteria: [CC6.1, CC6.3]
+    criteria: [CC6.1, CC6.3, CC7.1]
   drift:
     severity: medium
-    criteria: [CC8.1]
+    # CC6.3 only for grant differences: column and foreign-key drift is not access evidence.
+    criteria: [CC8.1, CC7.1, { id: CC6.3, kinds: [grant_mismatch] }]

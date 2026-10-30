@@ -103,6 +103,20 @@ fn findings(db: &Db) -> BTreeSet<String> {
 /// (as the superuser) to a fresh database from the same fixture → re-scan:
 /// the finding is gone and nothing else changed. Returns the generated SQL
 /// and the command's JSON output.
+/// `before` without `selector`'s finding. An ON DELETE CASCADE fix is also the
+/// table's deletion path, so it resolves that table's `no_deletion_path` too.
+fn resolved(before: BTreeSet<String>, selector: &str) -> BTreeSet<String> {
+    let table = selector.rsplit('/').next().unwrap_or_default();
+    let cascade = selector.starts_with("deletion_path/fk_without_on_delete/");
+    before
+        .into_iter()
+        .filter(|f| !f.starts_with(&format!("{selector} ")))
+        .filter(|f| {
+            !(cascade && f.starts_with(&format!("deletion_path/no_deletion_path/{table} ")))
+        })
+        .collect()
+}
+
 fn fix_resolves(fixture: &str, selector: &str, extra_args: &[&str], file: &str) -> (String, Value) {
     let db = fixture_db(fixture);
     let before = findings(&db);
@@ -165,10 +179,7 @@ fn fix_resolves(fixture: &str, selector: &str, extra_args: &[&str], file: &str) 
 
     let fresh = fixture_db(fixture);
     admin_sql(&fresh.name, &sql);
-    let expected: BTreeSet<String> = before
-        .into_iter()
-        .filter(|f| !f.starts_with(&format!("{selector} ")))
-        .collect();
+    let expected = resolved(before, selector);
     assert_eq!(findings(&fresh), expected);
     (sql, printed)
 }
@@ -949,10 +960,7 @@ fn a_repo_only_fix_follows_a_rename_of_the_referenced_column() {
         "{before:#?}"
     );
     admin_sql(&db.name, &sql);
-    let expected: BTreeSet<String> = before
-        .into_iter()
-        .filter(|f| !f.starts_with(&format!("{selector} ")))
-        .collect();
+    let expected = resolved(before, selector);
     assert_eq!(findings(&db), expected);
 }
 

@@ -606,13 +606,31 @@ fn sample_column(
 /// Whether `command` (a pg_cron command or a line of code) deletes from
 /// `schema.table`, qualified or bare, quoted or not.
 fn purges(command: &str, schema: &str, table: &str) -> bool {
+    // One spaced-out lower-case string, quotes gone, `=` without spaces.
     let lower = command.to_lowercase().replace(['"', '`'], "");
-    let words: Vec<&str> = lower
-        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
-        .filter(|w| !w.is_empty())
-        .collect();
-    words.windows(3).any(|w| {
-        w[0] == "delete" && w[1] == "from" && (w[2] == table || w[2] == format!("{schema}.{table}"))
+    let text = lower
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace(" = ", "=");
+    let qualified = format!("{schema}.{table}");
+    text.match_indices("delete from ").any(|(i, m)| {
+        let after = &text[i + m.len()..];
+        let after = after.strip_prefix("only ").unwrap_or(after);
+        let end = after
+            .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+            .unwrap_or(after.len());
+        let name = &after[..end];
+        // A predicate that is always false, and is the whole predicate, deletes nothing.
+        let noop = ["where false", "where 1=0"].iter().any(|p| {
+            after[end..]
+                .trim_start()
+                .strip_prefix(p)
+                .is_some_and(|rest| {
+                    rest.trim_start().is_empty() || rest.trim_start().starts_with([';', ')', '\''])
+                })
+        });
+        (name == table || name == qualified) && !noop
     })
 }
 
@@ -743,7 +761,8 @@ fn deletion_check(
         let mut paths = Vec::new();
         let mut gaps = Vec::new();
         for fk in &t.foreign_keys {
-            if fk.removes() {
+            // A cascade from the table itself never starts a delete.
+            if fk.removes() && fk.references != (schema.clone(), table.clone()) {
                 paths.push(path("on_delete", fk.evidence.clone()));
             } else if fk.lacks_on_delete() {
                 gaps.push(Finding::treatment(
@@ -756,6 +775,8 @@ fn deletion_check(
                 ));
             }
         }
+        // A foreign key gap is about the referenced rows; it says nothing about deleting these.
+        let fk_gaps = gaps.len();
         let mut purged = false;
         for d in facts
             .deleters
@@ -780,7 +801,7 @@ fn deletion_check(
                 ));
             }
         }
-        if paths.is_empty() && gaps.is_empty() {
+        if paths.is_empty() && gaps.len() == fk_gaps {
             gaps.push(Finding::treatment(
                 "deletion_path",
                 "no_deletion_path",

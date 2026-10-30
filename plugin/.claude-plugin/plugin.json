@@ -1,6 +1,6 @@
 {
   "name": "herculean",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Maps personal data in Postgres and this repo, reports deletion gaps and SOC 2 readiness, and warns on personal-data drift. A thin wrapper around the herculean CLI.",
   "author": {
     "name": "Herculean"

@@ -18,6 +18,13 @@ use std::path::{Component, Path, PathBuf};
 
 const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules"];
 
+/// Documentation: its deletes are examples, never deletion paths.
+const DOC_EXTENSIONS: [&str; 8] = ["md", "markdown", "mdx", "txt", "rst", "adoc", "html", "htm"];
+
+/// Languages where a line starting with `#` is a comment (not C's `#define`).
+const HASH_COMMENT_EXTENSIONS: [&str; 9] =
+    ["py", "rb", "sh", "bash", "yml", "yaml", "toml", "pl", "r"];
+
 /// Larger files are not read (a repo is untrusted input; the hook runs on every edit).
 pub(crate) const MAX_FILE_BYTES: u64 = 1 << 20;
 
@@ -127,15 +134,45 @@ pub fn read(root: &Path, migrations_dir: Option<&str>) -> std::io::Result<Facts>
         };
         let migration = path.extension().is_some_and(|e| e == "sql")
             && rel.starts_with(dir.as_deref().unwrap_or_default());
-        for (i, line) in text.lines().enumerate() {
-            if line.to_lowercase().contains("delete") {
-                facts.deleters.push(Deleter {
-                    kind: "code",
-                    evidence: format!("file:{rel}:{}", i + 1),
-                    command: line.to_string(),
-                    migration,
-                });
+        // Docs and comments describe deletes; they don't run them. Comments are
+        // judged by how the line starts: a trailing or block comment still counts.
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+        let doc = ext.as_deref().is_some_and(|e| DOC_EXTENSIONS.contains(&e));
+        let hash = ext
+            .as_deref()
+            .is_some_and(|e| HASH_COMMENT_EXTENSIONS.contains(&e));
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let start = line.trim_start();
+            let comment = ["--", "//", "/*", "* "]
+                .iter()
+                .any(|c| start.starts_with(c))
+                || start == "*"
+                || (hash && start.starts_with('#'));
+            if doc || comment || !line.to_lowercase().contains("delete") {
+                continue;
             }
+            // `DELETE FROM` at the end of a line: its table is on the next.
+            let mut command = line.to_string();
+            let words: Vec<String> = line
+                .to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .map(str::to_string)
+                .collect();
+            if words.ends_with(&["delete".into(), "from".into()])
+                || words.ends_with(&["delete".into(), "from".into(), "only".into()])
+            {
+                if let Some(next) = lines.get(i + 1) {
+                    command = format!("{line} {next}");
+                }
+            }
+            facts.deleters.push(Deleter {
+                kind: "code",
+                evidence: format!("file:{rel}:{}", i + 1),
+                command,
+                migration,
+            });
         }
         let name = rel.rsplit('/').next().unwrap_or_default();
         let down = name == "down.sql" || name.ends_with(".down.sql");

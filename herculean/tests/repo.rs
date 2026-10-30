@@ -93,6 +93,147 @@ fn code_that_deletes_the_rows_is_a_deletion_path() {
     assert_eq!(report["skipped_checks"], skipped_checks());
 }
 
+/// Finding kinds and deletion paths of a repo-only scan of `files` plus a
+/// `customers` table in `migrations/001.sql`.
+fn deletion_result(files: &[(&str, &str)]) -> (Vec<String>, Value) {
+    let mut files = files.to_vec();
+    files.push(("migrations/001.sql", CREATE_CUSTOMERS));
+    let tmp = repo_with(&files);
+    let report = stdout_json(&scan_with(None, &["--repo", tmp.0.to_str().unwrap()]));
+    let kinds = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["kind"].as_str().unwrap().to_string())
+        .collect();
+    (kinds, report["data_map"]["deletion_paths"].clone())
+}
+
+#[test]
+fn deletes_in_docs_comments_or_always_false_are_not_deletion_paths() {
+    for (path, text) in [
+        ("README.md", "Example only:\nDELETE FROM customers;\n"),
+        ("docs/purge.txt", "DELETE FROM customers;\n"),
+        ("src/app.py", "# DELETE FROM customers\n"),
+        ("src/app.ts", "  // DELETE FROM customers WHERE id = $1\n"),
+        ("src/app.sql", "-- DELETE FROM customers;\n"),
+        (
+            "src/app.go",
+            "db.Exec(\"DELETE FROM customers WHERE false\")\n",
+        ),
+        (
+            "src/app.rb",
+            "db.exec('DELETE FROM customers WHERE 1 = 0')\n",
+        ),
+    ] {
+        let (kinds, paths) = deletion_result(&[(path, text)]);
+        assert_eq!(kinds, ["no_deletion_path"], "{path}");
+        assert_eq!(paths, Value::Null, "{path}");
+    }
+}
+
+/// Review repros: deletes that do run, or comment filters that must not drop code.
+#[test]
+fn deletes_that_run_are_deletion_paths() {
+    for (path, text) in [
+        (
+            "src/app.go",
+            "db.Exec(\"DELETE FROM customers WHERE 1 > 0\")\n",
+        ),
+        (
+            "src/app.go",
+            "db.Exec(\"DELETE FROM customers WHERE 1 <> 0\")\n",
+        ),
+        (
+            "src/app.go",
+            "db.Exec(\"DELETE FROM customers WHERE false OR id = $1\")\n",
+        ),
+        (
+            "src/app.go",
+            "db.Exec(\"DELETE FROM customers WHERE 1=0 OR id = $1\")\n",
+        ),
+        (
+            "src/app.c",
+            "#define Q \"DELETE FROM customers WHERE id = ?\"\n",
+        ),
+        (
+            "src/app.go",
+            "*p = exec(\"DELETE FROM customers WHERE id = $1\")\n",
+        ),
+    ] {
+        let (kinds, paths) = deletion_result(&[(path, text)]);
+        assert_eq!(kinds, Vec::<String>::new(), "{text}");
+        assert_eq!(paths[0]["evidence_id"], format!("file:{path}:1"), "{text}");
+    }
+}
+
+/// Each delete is credited to its own line, never to the line above it.
+#[test]
+fn a_delete_is_credited_only_to_its_own_line() {
+    for text in [
+        "db.Exec(\"DELETE FROM customers WHERE false\")\ndb.Exec(\"DELETE FROM customers WHERE id = $1\")\n",
+        "items.delete(x)\ndb.Exec(\"DELETE FROM customers WHERE id = $1\")\n",
+    ] {
+        let (_, paths) = deletion_result(&[("src/app.go", text)]);
+        assert_eq!(
+            paths,
+            json!([{ "table": "public.customers", "kind": "code", "evidence_id": "file:src/app.go:2" }]),
+            "{text}"
+        );
+    }
+    for text in [
+        "obj.delete(x)\n// DELETE FROM customers\n",
+        "q.delete()\nfrom customers import x\n",
+    ] {
+        let (kinds, _) = deletion_result(&[("src/app.ts", text)]);
+        assert_eq!(kinds, ["no_deletion_path"], "{text}");
+    }
+}
+
+#[test]
+fn delete_from_only_and_multi_line_deletes_are_deletion_paths() {
+    for text in [
+        "db.query(\"DELETE FROM ONLY customers WHERE id = $1\")\n",
+        "db.query(`\n  DELETE FROM\n    customers\n  WHERE id = $1`)\n",
+    ] {
+        let (kinds, paths) = deletion_result(&[("src/app.ts", text)]);
+        assert_eq!(kinds, Vec::<String>::new(), "{text}");
+        let line = text.lines().position(|l| l.contains("DELETE")).unwrap() + 1;
+        assert_eq!(
+            paths,
+            json!([{ "table": "public.customers", "kind": "code", "evidence_id": format!("file:src/app.ts:{line}") }]),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_cascade_from_the_table_itself_is_not_a_deletion_path() {
+    let report = migrations_report(&[(
+        "001.sql",
+        "CREATE TABLE customers (id int PRIMARY KEY, email text,\n\
+         parent_id int REFERENCES customers (id) ON DELETE CASCADE);\n",
+    )]);
+    assert_eq!(report["data_map"]["deletion_paths"], Value::Null);
+    assert_eq!(report["findings"][0]["kind"], "no_deletion_path");
+}
+
+#[test]
+fn a_foreign_key_without_on_delete_does_not_hide_no_deletion_path() {
+    let report = migrations_report(&[(
+        "001.sql",
+        "CREATE TABLE accounts (id int PRIMARY KEY);\n\
+         CREATE TABLE customers (id int, email text, account_id int REFERENCES accounts (id));\n",
+    )]);
+    let kinds: Vec<&str> = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["fk_without_on_delete", "no_deletion_path"]);
+}
+
 #[test]
 fn migration_facts_give_the_live_deletion_rules() {
     let report = stdout_json(&scan_repo("migration_facts", &[]));

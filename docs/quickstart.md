@@ -16,7 +16,7 @@ CI runs every `sh` block on this page, in order, on a fresh runner. Keep them ru
 
 Each GitHub Release has prebuilt binaries for Linux (x86_64, arm64), macOS (Intel, Apple silicon) and Windows (x86_64),
 with a `SHA256SUMS` file. On Linux and macOS, the install script downloads the right one, checks its checksum and puts it in
-`~/.local/bin` (set `HERCULEAN_INSTALL_DIR` to change that, `HERCULEAN_VERSION=v0.1.0` to pin a release):
+`~/.local/bin` (set `HERCULEAN_INSTALL_DIR` to change that, `HERCULEAN_VERSION=v0.2.0` to pin a release):
 
 ```text
 curl -fsSL https://raw.githubusercontent.com/Herculean-io/herculean/main/install.sh | sh

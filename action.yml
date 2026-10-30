@@ -18,7 +18,7 @@ inputs:
     description: Optional read-only Postgres connection string. Pass it from a secret. For a remote database include sslmode=verify-full, plus sslrootcert=<path to the CA bundle> for a private CA such as AWS RDS (global-bundle.pem). sslmode=require encrypts but does not authenticate the server. Per service, RDS/Aurora sslmode=verify-full sslrootcert=global-bundle.pem (RDS Proxy needs none); Cloud SQL sslmode=verify-ca with sslrootcert=server-ca.pem; AlloyDB direct supports only require, use the Auth Proxy; Azure verify-full, no root in public regions; Neon verify-full on the direct host, not the -pooler host; Supabase sslmode=verify-full sslrootcert=prod-ca-2021.crt and the session pooler (port 5432), since runners have no IPv6. The Supabase transaction pooler (port 6543) is refused. See docs/quickstart.md. Without it the run is repo-only.
     default: ""
   ref:
-    description: Git ref of Herculean to install. Empty installs the same ref as this action. A release tag (v0.1.0) installs that release's prebuilt binary, checked against its SHA256SUMS; any other ref, or a runner with no prebuilt binary, builds it from source with cargo.
+    description: Git ref of Herculean to install. Empty installs the same ref as this action. A release tag (v0.2.0) installs that release's prebuilt binary, checked against its SHA256SUMS; any other ref, or a runner with no prebuilt binary, builds it from source with cargo.
     default: ""
   artifact-name:
     description: Name of the uploaded report artifact. Must be unique within a workflow run.

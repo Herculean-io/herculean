@@ -61,11 +61,90 @@ struct Criterion {
 #[serde(deny_unknown_fields)]
 struct CheckMapping {
     severity: Severity,
-    criteria: Vec<String>,
+    criteria: Vec<Link>,
+}
+
+/// Every finding kind each check can report, for mapping links that name kinds.
+const FINDING_KINDS: [(&str, &[&str]); 5] = [
+    ("data_map", &["incomplete_input"]),
+    (
+        "deletion_path",
+        &[
+            "no_deletion_path",
+            "soft_delete_without_purge",
+            "fk_without_on_delete",
+        ],
+    ),
+    (
+        "recreation_risk",
+        &[
+            "publication",
+            "subscription",
+            "copy_trigger",
+            "export_trigger",
+            "supabase_functions",
+            "foreign_table",
+        ],
+    ),
+    (
+        "least_privilege",
+        &[
+            "superuser_role",
+            "bypassrls_role",
+            "read_all_data_role",
+            "provider_admin_role",
+            "public_grant",
+            "group_role_grant",
+            "missing_rls",
+        ],
+    ),
+    (
+        "drift",
+        &[
+            "missing_live_table",
+            "extra_live_table",
+            "missing_live_column",
+            "extra_live_column",
+            "missing_live_fk",
+            "extra_live_fk",
+            "on_delete_mismatch",
+            "grant_mismatch",
+        ],
+    ),
+];
+
+/// A check's link to one criterion: every finding kind, or only `kinds`.
+#[derive(Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum Link {
+    All(String),
+    Kinds { id: String, kinds: Vec<String> },
+}
+
+impl Link {
+    fn id(&self) -> &str {
+        match self {
+            Link::All(id) | Link::Kinds { id, .. } => id,
+        }
+    }
+
+    fn carries(&self, kind: &str) -> bool {
+        match self {
+            Link::All(_) => true,
+            Link::Kinds { kinds, .. } => kinds.iter().any(|k| k == kind),
+        }
+    }
 }
 
 pub fn parse_mapping(text: &str) -> Result<Mapping, String> {
-    let mut mapping: Mapping = serde_norway::from_str(text).map_err(|e| e.to_string())?;
+    let mut mapping: Mapping = serde_norway::from_str(text).map_err(|e| {
+        let e = e.to_string();
+        if e.contains("enum Link") {
+            format!("{e}: each criteria entry is an ID or {{ id: <criterion>, kinds: [<finding kind>, ...] }}")
+        } else {
+            e
+        }
+    })?;
     mapping.sha256 = crate::hex(&Sha256::digest(text));
     // The id names the evidence file: a plain file name only.
     for c in &mapping.criteria {
@@ -79,14 +158,35 @@ pub fn parse_mapping(text: &str) -> Result<Mapping, String> {
             ));
         }
         // An evidence file with no items fails the verify step.
-        if !mapping.checks.values().any(|m| m.criteria.contains(&c.id)) {
+        if !mapping
+            .checks
+            .values()
+            .any(|m| m.criteria.iter().any(|l| l.id() == c.id))
+        {
             return Err(format!("criterion {} has no check mapped to it", c.id));
         }
     }
     for (check, m) in &mapping.checks {
-        for id in &m.criteria {
-            if !mapping.criteria.iter().any(|c| &c.id == id) {
+        for link in &m.criteria {
+            let id = link.id();
+            if !mapping.criteria.iter().any(|c| c.id == id) {
                 return Err(format!("check {check} maps to unlisted criterion {id}"));
+            }
+            if m.criteria.iter().filter(|l| l.id() == id).count() > 1 {
+                return Err(format!("check {check} maps to {id} twice"));
+            }
+            if let Link::Kinds { kinds, .. } = link {
+                if kinds.is_empty() {
+                    return Err(format!("check {check} maps to {id} with empty kinds"));
+                }
+                // A mistyped kind would leave the criterion reading clean.
+                let known = FINDING_KINDS.iter().find(|(c, _)| c == check);
+                if let Some(kind) = kinds
+                    .iter()
+                    .find(|k| !known.is_some_and(|(_, ks)| ks.contains(&k.as_str())))
+                {
+                    return Err(format!("check {check} has no finding kind {kind}"));
+                }
             }
         }
     }
@@ -226,8 +326,8 @@ pub fn write(
         String::new()
     } else {
         format!(
-            "Criterion IDs and titles must be verified against the AICPA Trust Services \
-             Criteria before release. Not yet verified: {}.\n\n",
+            "Criterion IDs, titles and the checks mapped to each must be verified against the \
+             AICPA Trust Services Criteria before release. Not yet verified: {}.\n\n",
             unverified.join(", ")
         )
     };
@@ -269,13 +369,15 @@ pub fn write(
     for criterion in &mapping.criteria {
         let id = criterion.id.as_str();
         let mut items = Vec::new();
-        for (check, _) in mapping
+        for (check, link) in mapping
             .checks
             .iter()
-            .filter(|(_, m)| m.criteria.iter().any(|c| c == id))
+            .filter_map(|(check, m)| Some((check, m.criteria.iter().find(|l| l.id() == id)?)))
         {
-            let check_findings: Vec<&Finding> =
-                findings.iter().filter(|f| f.check == *check).collect();
+            let check_findings: Vec<&Finding> = findings
+                .iter()
+                .filter(|f| f.check == *check && link.carries(f.kind))
+                .collect();
             let result = if not_run.contains(&check.as_str()) {
                 "not_run"
             } else if check_findings.is_empty() {

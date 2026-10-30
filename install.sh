@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Herculean-io/herculean/main/install.sh | sh
 #
-# HERCULEAN_VERSION      release tag to install, such as v0.1.0 (default: the latest release)
+# HERCULEAN_VERSION      release tag to install, such as v0.2.0 (default: the latest release)
 # HERCULEAN_INSTALL_DIR  where to put the binary (default: ~/.local/bin)
 # HERCULEAN_DOWNLOAD_URL a mirror holding the release archives and SHA256SUMS (default: the GitHub release)
 #

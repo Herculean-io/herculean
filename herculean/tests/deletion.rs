@@ -33,12 +33,18 @@ fn foreign_key_without_on_delete_is_a_finding() {
         report,
         json!({
             "data_map": { "stores": [email_store("customers")] },
+            // The foreign key gap doesn't hide that nothing deletes customers itself.
             "findings": [{
                 "check": "deletion_path",
                 "kind": "fk_without_on_delete",
                 "resource_id": "public.customers",
                 "steps": steps(&db.name, "public.customers",
                     "pg_constraint:public.customers.customers_account_id_fkey", DELETE)
+            }, {
+                "check": "deletion_path",
+                "kind": "no_deletion_path",
+                "resource_id": "public.customers",
+                "steps": steps(&db.name, "public.customers", "pg_class:public.customers", DELETE)
             }],
             "skipped_checks": no_repo()
         })
