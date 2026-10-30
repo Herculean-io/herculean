@@ -11,7 +11,7 @@ Herculean is a command-line tool that scans a Postgres database's schema (throug
 | `herculean/` | **Herculean CLI** (Rust, Apache-2.0, see [`LICENSE`](LICENSE)): maps personal data in Postgres and repos and writes findings plus a SOC 2 readiness report. Read-only role grant list: `herculean/read-only-role.sql` |
 | `plugin/` | **Claude Code plugin**: `/herculean:scan`, `/herculean:readiness`, `/herculean:fix` (a finding becomes a reviewable migration PR), a drift hook and the `herculean mcp` server. Marketplace manifest: `.claude-plugin/marketplace.json` |
 | `install.sh`, `.github/workflows/release.yml` | **Binary releases**: a `v*` tag builds `herculean` for Linux, macOS and Windows and publishes each archive (binary, `read-only-role.sql`, `LICENSE`) with `SHA256SUMS`; `install.sh` installs the right binary and checks it |
-| `action.yml` | **GitHub Action**: runs `herculean report` on pull requests, uploads the report and fails the job at a severity threshold (`fail-on`). At a release tag (`@v0.1.0`) it installs that release's checksummed binary; at any other ref it builds from source |
+| `action.yml` | **GitHub Action**: runs `herculean report` on pull requests, uploads the report and fails the job at a severity threshold (`fail-on`). At a release tag (`@v0.2.0`) it installs that release's checksummed binary; at any other ref it builds from source |
 | `examples/` | sample repos the CI runs the Action against: `sample-app/` (exits 2), `clean-app/` (exits 0) |
 
 ## License
